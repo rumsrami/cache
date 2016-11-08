@@ -224,9 +224,23 @@ func (c *cache) ItemCount() int {
 
 // Delete all items from the cache.
 func (c *cache) Flush() {
+	var evictedItems []keyAndValue
+	now := time.Now().UnixNano()
 	c.mu.Lock()
-	c.items = map[interface{}]Item{}
+	for k, v := range c.items {
+		// "Inlining" of expired
+		if v.Expiration <= 0 || now <= v.Expiration {
+			ov, evicted := c.delete(k)
+			if evicted {
+				evictedItems = append(evictedItems, keyAndValue{k, ov})
+			}
+		}
+	}
+        c.items = map[interface{}]Item{}
 	c.mu.Unlock()
+	for _, v := range evictedItems {
+		c.onEvicted(v.key, v.value)
+	}
 }
 
 type janitor struct {
