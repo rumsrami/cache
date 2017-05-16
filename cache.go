@@ -136,25 +136,14 @@ func (c *cache) GetAndExtend(k interface{}, d time.Duration) (interface{}, bool)
 	c.Lock()
 	defer c.Unlock()
 
-	// "Inlining" of get and Expired
-	item, found := c.items[k]
+	item, found := c.get(k)
 	if !found {
 		return nil, false
 	}
-	if item.Expiration > 0 {
-		if time.Now().UnixNano() > item.Expiration {
-			return nil, false
-		}
-	}
 
 	if d > 0 {
-		extendExpiration := time.Now().Add(d).UnixNano()
-		if item.Expiration < extendExpiration {
-			item.Expiration = extendExpiration
-			c.items[k] = item
-		}
+		c.set(k, item.Object, d)
 	}
-
 	return item.Object, true
 }
 
@@ -172,6 +161,30 @@ func (c *cache) GetOrLoad(k interface{}, load func(k interface{}) (interface{}, 
 		return object
 	}
 
+	return item.Object
+}
+
+// GetAndExtendOrLoad an item from the cache. If the key is present in the cache,
+// return it's item and extend it's expiration. Otherwise load a new item using
+// the load() callback, add it to the cache and return it.
+func (c *cache) GetAndExtendOrLoad(k interface{}, d time.Duration, load func(k interface{}) (interface{}, time.Duration)) interface{} {
+	if d == DefaultExpiration {
+		d = c.defaultExpiration
+	}
+
+	c.Lock()
+	defer c.Unlock()
+
+	item, found := c.get(k)
+	if !found {
+		object, d := load(k)
+		c.set(k, object, d)
+		return object
+	}
+
+	if d > 0 {
+		c.set(k, item.Object, d)
+	}
 	return item.Object
 }
 

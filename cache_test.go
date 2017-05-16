@@ -284,7 +284,40 @@ func TestGetAndExtend(t *testing.T) {
 	if found {
 		t.Error("Should not have found a")
 	}
+}
 
+func TestGetAndExtendOrLoad(t *testing.T) {
+	tc := New(50*time.Millisecond, 1*time.Millisecond)
+
+	makeHello := func(k interface{}) (interface{}, time.Duration) {
+		return "hello", DefaultExpiration
+	}
+	makeGoodbye := func(k interface{}) (interface{}, time.Duration) {
+		return "goodbye", DefaultExpiration
+	}
+
+	object := tc.GetAndExtendOrLoad("key", DefaultExpiration, makeHello)
+	if object.(string) != "hello" {
+		t.Error(object)
+	}
+
+	<-time.After(45 * time.Millisecond)
+	object = tc.GetAndExtendOrLoad("key", DefaultExpiration, makeGoodbye)
+	if object.(string) != "hello" {
+		t.Error(object)
+	}
+
+	<-time.After(10 * time.Millisecond)
+	object = tc.GetAndExtendOrLoad("key", DefaultExpiration, makeGoodbye)
+	if object.(string) != "hello" {
+		t.Error(object)
+	}
+
+	<-time.After(55 * time.Millisecond)
+	object = tc.GetAndExtendOrLoad("key", DefaultExpiration, makeGoodbye)
+	if object.(string) != "goodbye" {
+		t.Error(object)
+	}
 }
 
 func BenchmarkCacheGetExpiring(b *testing.B) {
