@@ -66,7 +66,7 @@ func TestCache(t *testing.T) {
 	}
 }
 
-func TestCache_GetOrLoad(t *testing.T) {
+func TestGetOrLoad(t *testing.T) {
 	c := New(DefaultExpiration, 0)
 	c.Set(5, "five", DefaultExpiration)
 
@@ -74,7 +74,7 @@ func TestCache_GetOrLoad(t *testing.T) {
 		t.Error("didn't get")
 	}
 
-	makeSix := func(k interface{})(interface{}, time.Duration) {
+	makeSix := func(k interface{}) (interface{}, time.Duration) {
 		return "six", DefaultExpiration
 	}
 
@@ -123,11 +123,11 @@ func TestCacheTimes(t *testing.T) {
 
 func TestNewFrom(t *testing.T) {
 	m := map[interface{}]Item{
-		"a": Item{
+		"a": {
 			Object:     1,
 			Expiration: 0,
 		},
-		"b": Item{
+		"b": {
 			Object:     2,
 			Expiration: 0,
 		},
@@ -261,6 +261,32 @@ func TestOnEvicted(t *testing.T) {
 	}
 }
 
+func TestGetAndExtend(t *testing.T) {
+	var found bool
+
+	tc := New(50*time.Millisecond, 1*time.Millisecond)
+	tc.Set("a", 1, DefaultExpiration)
+
+	<-time.After(45 * time.Millisecond)
+	_, found = tc.GetAndExtend("a", time.Millisecond*50)
+	if !found {
+		t.Error("Did not find a")
+	}
+
+	<-time.After(10 * time.Millisecond)
+	_, found = tc.Get("a")
+	if !found {
+		t.Error("Did not find a")
+	}
+
+	<-time.After(55 * time.Millisecond)
+	_, found = tc.Get("a")
+	if found {
+		t.Error("Should not have found a")
+	}
+
+}
+
 func BenchmarkCacheGetExpiring(b *testing.B) {
 	benchmarkCacheGet(b, 5*time.Minute)
 }
@@ -295,7 +321,7 @@ func BenchmarkRWMutexMapGet(b *testing.B) {
 
 func BenchmarkRWMutexInterfaceMapGetStruct(b *testing.B) {
 	b.StopTimer()
-	s := struct{name string}{name: "foo"}
+	s := struct{ name string }{name: "foo"}
 	m := map[interface{}]string{
 		s: "bar",
 	}

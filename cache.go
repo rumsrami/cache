@@ -126,10 +126,44 @@ func (c *cache) Get(k interface{}) (interface{}, bool) {
 	return item.Object, true
 }
 
+// GetAndExtend an item from the cache. Returns the item or
+// nil, and a bool indicating  whether the key was found. The item's
+// expiration time is extended by d, if found.
+func (c *cache) GetAndExtend(k interface{}, d time.Duration) (interface{}, bool) {
+	if d == DefaultExpiration {
+		d = c.defaultExpiration
+	}
+
+	c.mu.RLock()
+	// "Inlining" of get and Expired
+	item, found := c.items[k]
+	if !found {
+		c.mu.RUnlock()
+		return nil, false
+	}
+	if item.Expiration > 0 {
+		if time.Now().UnixNano() > item.Expiration {
+			c.mu.RUnlock()
+			return nil, false
+		}
+	}
+
+	if d > 0 {
+		extendExpiration := time.Now().Add(d).UnixNano()
+		if item.Expiration < extendExpiration {
+			item.Expiration = extendExpiration
+			c.items[k] = item
+		}
+	}
+
+	c.mu.RUnlock()
+	return item.Object, true
+}
+
 // GetOrLoad an item from the cache. If the key is present in the cache,
 // return it's item. Otherwise load a new item using the load() callback, add
 // it to the cache and return it.
-func (c *cache) GetOrLoad(k interface{}, load func(k interface{})(interface{}, time.Duration)) interface{} {
+func (c *cache) GetOrLoad(k interface{}, load func(k interface{}) (interface{}, time.Duration)) interface{} {
 	c.mu.Lock()
 
 	item, found := c.get(k)
@@ -142,7 +176,6 @@ func (c *cache) GetOrLoad(k interface{}, load func(k interface{})(interface{}, t
 	c.mu.Unlock()
 	return item
 }
-
 
 func (c *cache) get(k interface{}) (interface{}, bool) {
 	item, found := c.items[k]
@@ -236,7 +269,7 @@ func (c *cache) Flush() {
 			}
 		}
 	}
-        c.items = map[interface{}]Item{}
+	c.items = map[interface{}]Item{}
 	c.mu.Unlock()
 	for _, v := range evictedItems {
 		c.onEvicted(v.key, v.value)
