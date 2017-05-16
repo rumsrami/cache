@@ -35,9 +35,9 @@ type Cache struct {
 }
 
 type cache struct {
+	sync.RWMutex
 	defaultExpiration time.Duration
 	items             map[interface{}]Item
-	mu                sync.RWMutex
 	onEvicted         func(interface{}, interface{})
 	janitor           *janitor
 }
@@ -54,14 +54,14 @@ func (c *cache) Set(k interface{}, x interface{}, d time.Duration) {
 	if d > 0 {
 		e = time.Now().Add(d).UnixNano()
 	}
-	c.mu.Lock()
+	c.Lock()
+	defer c.Unlock()
 	c.items[k] = Item{
 		Object:     x,
 		Expiration: e,
 	}
 	// TODO: Calls to mu.Unlock are currently not deferred because defer
 	// adds ~200 ns (as of go1.)
-	c.mu.Unlock()
 }
 
 func (c *cache) set(k interface{}, x interface{}, d time.Duration) {
@@ -81,48 +81,47 @@ func (c *cache) set(k interface{}, x interface{}, d time.Duration) {
 // Add an item to the cache only if an item doesn't already exist for the given
 // key, or if the existing item has expired. Returns an error otherwise.
 func (c *cache) Add(k interface{}, x interface{}, d time.Duration) error {
-	c.mu.Lock()
+	c.Lock()
+	defer c.Unlock()
+
 	_, found := c.get(k)
 	if found {
-		c.mu.Unlock()
 		return fmt.Errorf("Item %s already exists", k)
 	}
 	c.set(k, x, d)
-	c.mu.Unlock()
 	return nil
 }
 
 // Set a new value for the cache key only if it already exists, and the existing
 // item hasn't expired. Returns an error otherwise.
 func (c *cache) Replace(k interface{}, x interface{}, d time.Duration) error {
-	c.mu.Lock()
+	c.Lock()
+	defer c.Unlock()
+
 	_, found := c.get(k)
 	if !found {
-		c.mu.Unlock()
 		return fmt.Errorf("Item %s doesn't exist", k)
 	}
 	c.set(k, x, d)
-	c.mu.Unlock()
 	return nil
 }
 
 // Get an item from the cache. Returns the item or nil, and a bool indicating
 // whether the key was found.
 func (c *cache) Get(k interface{}) (interface{}, bool) {
-	c.mu.RLock()
+	c.RLock()
+	defer c.RUnlock()
+
 	// "Inlining" of get and Expired
 	item, found := c.items[k]
 	if !found {
-		c.mu.RUnlock()
 		return nil, false
 	}
 	if item.Expiration > 0 {
 		if time.Now().UnixNano() > item.Expiration {
-			c.mu.RUnlock()
 			return nil, false
 		}
 	}
-	c.mu.RUnlock()
 	return item.Object, true
 }
 
@@ -134,16 +133,16 @@ func (c *cache) GetAndExtend(k interface{}, d time.Duration) (interface{}, bool)
 		d = c.defaultExpiration
 	}
 
-	c.mu.RLock()
+	c.Lock()
+	defer c.Unlock()
+
 	// "Inlining" of get and Expired
 	item, found := c.items[k]
 	if !found {
-		c.mu.RUnlock()
 		return nil, false
 	}
 	if item.Expiration > 0 {
 		if time.Now().UnixNano() > item.Expiration {
-			c.mu.RUnlock()
 			return nil, false
 		}
 	}
@@ -156,7 +155,6 @@ func (c *cache) GetAndExtend(k interface{}, d time.Duration) (interface{}, bool)
 		}
 	}
 
-	c.mu.RUnlock()
 	return item.Object, true
 }
 
@@ -164,20 +162,20 @@ func (c *cache) GetAndExtend(k interface{}, d time.Duration) (interface{}, bool)
 // return it's item. Otherwise load a new item using the load() callback, add
 // it to the cache and return it.
 func (c *cache) GetOrLoad(k interface{}, load func(k interface{}) (interface{}, time.Duration)) interface{} {
-	c.mu.Lock()
+	c.Lock()
+	defer c.Unlock()
 
 	item, found := c.get(k)
 	if !found {
-		var d time.Duration
-		item, d = load(k)
-		c.set(k, item, d)
+		object, d := load(k)
+		c.set(k, object, d)
+		return object
 	}
 
-	c.mu.Unlock()
-	return item
+	return item.Object
 }
 
-func (c *cache) get(k interface{}) (interface{}, bool) {
+func (c *cache) get(k interface{}) (*Item, bool) {
 	item, found := c.items[k]
 	if !found {
 		return nil, false
@@ -188,14 +186,14 @@ func (c *cache) get(k interface{}) (interface{}, bool) {
 			return nil, false
 		}
 	}
-	return item.Object, true
+	return &item, true
 }
 
 // Delete an item from the cache. Does nothing if the key is not in the cache.
 func (c *cache) Delete(k interface{}) {
-	c.mu.Lock()
+	c.Lock()
 	v, evicted := c.delete(k)
-	c.mu.Unlock()
+	c.Unlock()
 	if evicted {
 		c.onEvicted(k, v)
 	}
@@ -221,7 +219,7 @@ type keyAndValue struct {
 func (c *cache) DeleteExpired() {
 	var evictedItems []keyAndValue
 	now := time.Now().UnixNano()
-	c.mu.Lock()
+	c.Lock()
 	for k, v := range c.items {
 		// "Inlining" of expired
 		if v.Expiration > 0 && now > v.Expiration {
@@ -231,7 +229,7 @@ func (c *cache) DeleteExpired() {
 			}
 		}
 	}
-	c.mu.Unlock()
+	c.Unlock()
 	for _, v := range evictedItems {
 		c.onEvicted(v.key, v.value)
 	}
@@ -241,25 +239,26 @@ func (c *cache) DeleteExpired() {
 // item is evicted from the cache. (Including when it is deleted manually, but
 // not when it is overwritten.) Set to nil to disable.
 func (c *cache) OnEvicted(f func(interface{}, interface{})) {
-	c.mu.Lock()
+	c.Lock()
+	defer c.Unlock()
+
 	c.onEvicted = f
-	c.mu.Unlock()
 }
 
 // Returns the number of items in the cache. This may include items that have
 // expired, but have not yet been cleaned up.
 func (c *cache) ItemCount() int {
-	c.mu.RLock()
-	n := len(c.items)
-	c.mu.RUnlock()
-	return n
+	c.Lock()
+	defer c.Unlock()
+
+	return len(c.items)
 }
 
 // Delete all items from the cache.
 func (c *cache) Flush() {
 	var evictedItems []keyAndValue
 	now := time.Now().UnixNano()
-	c.mu.Lock()
+	c.Lock()
 	for k, v := range c.items {
 		// "Inlining" of expired
 		if v.Expiration <= 0 || now <= v.Expiration {
@@ -270,7 +269,7 @@ func (c *cache) Flush() {
 		}
 	}
 	c.items = map[interface{}]Item{}
-	c.mu.Unlock()
+	c.Unlock()
 	for _, v := range evictedItems {
 		c.onEvicted(v.key, v.value)
 	}

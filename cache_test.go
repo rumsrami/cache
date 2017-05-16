@@ -305,7 +305,7 @@ func benchmarkCacheGet(b *testing.B, exp time.Duration) {
 	}
 }
 
-func BenchmarkRWMutexMapGet(b *testing.B) {
+func BenchmarkRLockMapGet(b *testing.B) {
 	b.StopTimer()
 	m := map[string]string{
 		"foo": "bar",
@@ -313,9 +313,59 @@ func BenchmarkRWMutexMapGet(b *testing.B) {
 	mu := sync.RWMutex{}
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		mu.RLock()
-		_, _ = m["foo"]
-		mu.RUnlock()
+		func() {
+			mu.RLock()
+			_, _ = m["foo"]
+			mu.RUnlock()
+		}()
+	}
+}
+
+func BenchmarkRLockMapGetDefer(b *testing.B) {
+	b.StopTimer()
+	m := map[string]string{
+		"foo": "bar",
+	}
+	mu := sync.RWMutex{}
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		func() {
+			mu.RLock()
+			defer mu.RUnlock()
+			_, _ = m["foo"]
+		}()
+	}
+}
+
+func BenchmarkLockMapGet(b *testing.B) {
+	b.StopTimer()
+	m := map[string]string{
+		"foo": "bar",
+	}
+	mu := sync.RWMutex{}
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		func() {
+			mu.Lock()
+			_, _ = m["foo"]
+			mu.Unlock()
+		}()
+	}
+}
+
+func BenchmarkLockMapGetDefer(b *testing.B) {
+	b.StopTimer()
+	m := map[string]string{
+		"foo": "bar",
+	}
+	mu := sync.RWMutex{}
+	b.StartTimer()
+	for i := 0; i < b.N; i++ {
+		func() {
+			mu.Lock()
+			defer mu.Unlock()
+			_, _ = m["foo"]
+		}()
 	}
 }
 
@@ -495,10 +545,10 @@ func BenchmarkCacheSetDeleteSingleLock(b *testing.B) {
 	tc := New(DefaultExpiration, 0)
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
-		tc.mu.Lock()
+		tc.Lock()
 		tc.set("foo", "bar", DefaultExpiration)
 		tc.delete("foo")
-		tc.mu.Unlock()
+		tc.Unlock()
 	}
 }
 
@@ -518,11 +568,11 @@ func BenchmarkRWMutexMapSetDeleteSingleLock(b *testing.B) {
 func BenchmarkDeleteExpiredLoop(b *testing.B) {
 	b.StopTimer()
 	tc := New(5*time.Minute, 0)
-	tc.mu.Lock()
+	tc.Lock()
 	for i := 0; i < 100000; i++ {
 		tc.set(strconv.Itoa(i), "bar", DefaultExpiration)
 	}
-	tc.mu.Unlock()
+	tc.Unlock()
 	b.StartTimer()
 	for i := 0; i < b.N; i++ {
 		tc.DeleteExpired()
