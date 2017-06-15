@@ -147,27 +147,31 @@ func (c *cache) GetAndExtend(k interface{}, d time.Duration) (interface{}, bool)
 	return item.Object, true
 }
 
+type loader func(k interface{}) (interface{}, time.Duration, error)
+
 // GetOrLoad an item from the cache. If the key is present in the cache,
 // return it's item. Otherwise load a new item using the load() callback, add
 // it to the cache and return it.
-func (c *cache) GetOrLoad(k interface{}, load func(k interface{}) (interface{}, time.Duration)) interface{} {
+func (c *cache) GetOrLoad(k interface{}, load loader) (interface{}, error) {
 	c.Lock()
 	defer c.Unlock()
 
 	item, found := c.get(k)
 	if !found {
-		object, d := load(k)
-		c.set(k, object, d)
-		return object
+		object, d, err := load(k)
+		if err == nil {
+			c.set(k, object, d)
+		}
+		return object, err
 	}
 
-	return item.Object
+	return item.Object, nil
 }
 
 // GetAndExtendOrLoad an item from the cache. If the key is present in the cache,
 // return it's item and extend it's expiration. Otherwise load a new item using
 // the load() callback, add it to the cache and return it.
-func (c *cache) GetAndExtendOrLoad(k interface{}, d time.Duration, load func(k interface{}) (interface{}, time.Duration)) interface{} {
+func (c *cache) GetAndExtendOrLoad(k interface{}, d time.Duration, load loader) (interface{}, error) {
 	if d == DefaultExpiration {
 		d = c.defaultExpiration
 	}
@@ -177,15 +181,17 @@ func (c *cache) GetAndExtendOrLoad(k interface{}, d time.Duration, load func(k i
 
 	item, found := c.get(k)
 	if !found {
-		object, d := load(k)
-		c.set(k, object, d)
-		return object
+		object, d, err := load(k)
+		if err == nil {
+			c.set(k, object, d)
+		}
+		return object, err
 	}
 
 	if d > 0 {
 		c.set(k, item.Object, d)
 	}
-	return item.Object
+	return item.Object, nil
 }
 
 func (c *cache) get(k interface{}) (*Item, bool) {

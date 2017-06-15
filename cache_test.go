@@ -6,6 +6,7 @@ import (
 	"sync"
 	"testing"
 	"time"
+	"errors"
 )
 
 type TestStruct struct {
@@ -70,16 +71,39 @@ func TestGetOrLoad(t *testing.T) {
 	c := New(DefaultExpiration, 0)
 	c.Set(5, "five", DefaultExpiration)
 
-	if c.GetOrLoad(5, nil).(string) != "five" {
+	item5, err := c.GetOrLoad(5, nil)
+	if err != nil {
+		t.Error(err)
+	}
+	if item5.(string) != "five" {
 		t.Error("didn't get")
 	}
 
-	makeSix := func(k interface{}) (interface{}, time.Duration) {
-		return "six", DefaultExpiration
+	makeSix := func(k interface{}) (interface{}, time.Duration, error) {
+		return "six", DefaultExpiration, nil
 	}
 
-	if c.GetOrLoad(6, makeSix).(string) != "six" {
+	item6, err := c.GetOrLoad(6, makeSix)
+	if item6.(string) != "six" {
 		t.Error("didn't load")
+	}
+
+	const sevenMessage = "I don't like seven"
+	failSeven := func(k interface{}) (interface{}, time.Duration, error) {
+		return "", DefaultExpiration, errors.New(sevenMessage)
+	}
+
+	_, err =  c.GetOrLoad(7, failSeven)
+	if err == nil {
+		t.Error("should have returned error")
+	}
+	if err.Error() != sevenMessage {
+		t.Error("wrong error")
+	}
+
+	_, found7 := c.Get(7)
+	if found7 {
+		t.Error("should not be in cache")
 	}
 }
 
@@ -289,32 +313,57 @@ func TestGetAndExtend(t *testing.T) {
 func TestGetAndExtendOrLoad(t *testing.T) {
 	tc := New(50*time.Millisecond, 1*time.Millisecond)
 
-	makeHello := func(k interface{}) (interface{}, time.Duration) {
-		return "hello", DefaultExpiration
+	makeHello := func(k interface{}) (interface{}, time.Duration, error) {
+		return "hello", DefaultExpiration, nil
 	}
-	makeGoodbye := func(k interface{}) (interface{}, time.Duration) {
-		return "goodbye", DefaultExpiration
+	makeGoodbye := func(k interface{}) (interface{}, time.Duration, error) {
+		return "goodbye", DefaultExpiration, nil
+	}
+	const errorMessage = "oops"
+	makeFail := func (k interface{}) (interface{}, time.Duration, error) {
+		return errorMessage, DefaultExpiration, errors.New(errorMessage)
 	}
 
-	object := tc.GetAndExtendOrLoad("key", DefaultExpiration, makeHello)
+	object, err := tc.GetAndExtendOrLoad("key", DefaultExpiration, makeHello)
+	if err != nil {
+		t.Error(err)
+	}
 	if object.(string) != "hello" {
 		t.Error(object)
 	}
 
 	<-time.After(45 * time.Millisecond)
-	object = tc.GetAndExtendOrLoad("key", DefaultExpiration, makeGoodbye)
+	object, err = tc.GetAndExtendOrLoad("key", DefaultExpiration, makeGoodbye)
+	if err != nil {
+		t.Error(err)
+	}
 	if object.(string) != "hello" {
 		t.Error(object)
 	}
 
 	<-time.After(10 * time.Millisecond)
-	object = tc.GetAndExtendOrLoad("key", DefaultExpiration, makeGoodbye)
+	object, err = tc.GetAndExtendOrLoad("key", DefaultExpiration, makeGoodbye)
+	if err != nil {
+		t.Error(err)
+	}
 	if object.(string) != "hello" {
 		t.Error(object)
 	}
 
 	<-time.After(55 * time.Millisecond)
-	object = tc.GetAndExtendOrLoad("key", DefaultExpiration, makeGoodbye)
+	object, err = tc.GetAndExtendOrLoad("key", DefaultExpiration, makeFail)
+	if err == nil {
+		t.Error("should be an error")
+	}
+	if err.Error() != errorMessage || object.(string) != errorMessage {
+		t.Error("wrong error")
+	}
+
+	<-time.After(5 * time.Millisecond)
+	object, err = tc.GetAndExtendOrLoad("key", DefaultExpiration, makeGoodbye)
+	if err != nil {
+		t.Error(err)
+	}
 	if object.(string) != "goodbye" {
 		t.Error(object)
 	}
